@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Leaflet Map with Polygons</title>
+
+  <!-- Leaflet CSS and JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+
+  <!-- Esri Leaflet -->
+  <script src="https://unpkg.com/esri-leaflet"></script>
+
+  <!-- Bootstrap CSS for the reset button -->
+  <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" rel="stylesheet" />
+
+  <style>
+    #map {
+      height: 100vh;
+    }
+
+    /* Updated search bar styling */
+    .input-group.search-bar {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1001;
+      width: 400px; /* Increase width */
+      background-color: #ffffff; /* White background */
+      border: 2px solid #007bff; /* Bold blue border */
+      border-radius: 8px; /* Rounded corners */
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* Add shadow */
+      padding: 10px; /* Add padding */
+    }
+
+    .input-group.search-bar input {
+      font-size: 16px; /* Increase font size */
+      padding: 12px; /* Add more padding inside input */
+    }
+
+    .autocomplete-list {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      background-color: white;
+      border: 1px solid #ddd;
+      max-height: 150px;
+      overflow-y: auto;
+      z-index: 1001;
+      box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1); /* Subtle shadow for suggestions */
+    }
+
+    .autocomplete-item {
+      padding: 12px; /* Add padding to suggestions */
+      font-size: 14px; /* Slightly larger font size */
+      cursor: pointer;
+    }
+
+    .autocomplete-item:hover {
+      background-color: #f1f1f1;
+    }
+
+    .reset-btn {
+      position: absolute;
+      bottom: 60px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1000;
+    }
+
+    #attributesWindow {
+      position: absolute;
+      bottom: 120px; /* Positioning above the reset button */
+      left: 50%;
+      transform: translateX(-50%);
+      width: 300px;
+      background: rgba(255, 255, 255, 0.8);
+      padding: 15px;
+      border: 1px solid #ccc;
+      z-index: 1001; /* Slightly lower z-index than the reset button */
+      box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+    }
+
+    #attributesWindow .close {
+      position: absolute;
+      top: 5px;
+      right: 10px;
+      background: transparent;
+      border: none;
+      font-size: 18px;
+      cursor: pointer;
+    }
+
+    /* Label styling */
+    .label {
+      background: rgba(255, 255, 255, 0.8);
+      padding: 5px;
+      border-radius: 5px;
+      font-size: 12px;
+      text-align: center;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="input-group mb-3 search-bar">
+    <input type="text" class="form-control" id="searchInput" placeholder="Search by Site Name..." aria-label="Search" aria-describedby="button-addon2">
+    <div id="autocompleteList" class="autocomplete-list"></div>
+  </div>
+
+  <button class="btn btn-danger reset-btn" id="resetMarkerBtn">Reset Marker</button>
+
+  <div id="map"></div>
+  <div id="attributesWindow" style="display: none;">
+    <button id="closeWindowBtn" class="close" aria-label="Close">&times;</button>
+    <h5>This persons works out of:</h5>
+    <div id="attributesContent"></div>
+  </div>
+
+  <script>
+    // Initialize the map
+    var map = L.map('map').setView([42.368342, -71.067488], 16); // Set default center
+
+    // Add the base map
+    L.tileLayer('https://tiles.arcgis.com/tiles/hGdibHYSPO59RG1h/arcgis/rest/services/MassGISBasemap/MapServer/tile/{z}/{y}/{x}', {
+      attribution: '&copy; <a href="https://www.arcgis.com/home/item.html?id=f26cf87f6e244b2fa343b39c5c4c7b01">MassGIS Basemap</a>',
+      maxZoom: 19
+    }).addTo(map);
+
+    // Feature Layer for points
+    var pointLayer = L.esri.featureLayer({
+      url: 'https://arcgisserver.digital.mass.gov/arcgisserver/rest/services/DCAM/DCAMM_Building_Points_with_Tririga_Data/FeatureServer/0',
+      where: "USERAGENCYCODE = 'DCR' AND BUILDINGTYPE IN ('1 - Major Building', '2 - Minor Building')",
+      fields: ['OBJECTID', 'NAME', 'SITENAME', 'BUILDINGCLASS'],
+      pointToLayer: function (geojson, latlng) {
+        return L.marker(latlng);
+      }
+    }).addTo(map);
+
+    var labelsLayer = L.layerGroup(); // Create a layer group for labels
+
+    // Function to add labels for all markers
+    function addLabels() {
+      labelsLayer.clearLayers(); // Clear any existing labels
+      pointLayer.eachFeature(function (layer) {
+        var label = L.marker(layer.getLatLng(), {
+          icon: L.divIcon({
+            className: 'label',
+            html: '<b>' + layer.feature.properties.NAME + '</b>',
+            iconSize: null
+          }),
+          riseOnHover: true
+        });
+        labelsLayer.addLayer(label);
+      });
+    }
+
+    // Ensure labels are added when the point layer is fully loaded
+    pointLayer.on('load', function () {
+      addLabels(); // Add labels for all markers when the layer is loaded
+      labelsLayer.addTo(map); // Ensure labels layer is added to the map
+    });
+
+    // Add polygons from the new polygon layer and store them for search
+    var polygonFeatures = [];
+    var polygonLayer = L.esri.featureLayer({
+      url: 'https://services1.arcgis.com/7iJyYTjCtKsZS1LR/arcgis/rest/services/DCR_OS_DISS_sitename/FeatureServer/5',
+      style: function () {
+        return {
+          color: 'lime', // Highlighter green outline
+          weight: 2,
+          fillColor: 'transparent', // Transparent fill
+          fillOpacity: 0
+        };
+      }
+    }).addTo(map);
+
+    // Use Esri Leaflet Query to retrieve polygon features
+    polygonLayer.query().where("1=1").run(function(error, featureCollection) {
+      if (error) {
+        console.error("Error fetching polygons:", error);
+        return;
+      }
+
+      featureCollection.features.forEach(function(feature) {
+        polygonFeatures.push(feature);
+      });
+    });
+
+    // Search bar functionality for querying polygonLayer by SITE_NAME
+    var searchInput = document.getElementById('searchInput');
+    searchInput.addEventListener('input', function() {
+      var query = searchInput.value.toLowerCase();
+      var matchingFeatures = [];
+
+      polygonFeatures.forEach(function (feature) {
+        var siteName = feature.properties.SITE_NAME;
+        if (siteName && siteName.toLowerCase().includes(query)) {
+          matchingFeatures.push(feature);
+        }
+      });
+
+      // Autocomplete suggestions
+      var autocompleteList = document.getElementById('autocompleteList');
+      autocompleteList.innerHTML = '';
+
+      matchingFeatures.forEach(function (feature) {
+        var listItem = document.createElement('div');
+        listItem.className = 'autocomplete-item';
+        listItem.textContent = feature.properties.SITE_NAME;
+        listItem.addEventListener('click', function () {
+          searchInput.value = feature.properties.SITE_NAME;
+          var bounds = L.geoJSON(feature).getBounds();
+          map.fitBounds(bounds);
+          autocompleteList.innerHTML = '';
+        });
+        autocompleteList.appendChild(listItem);
+      });
+    });
+
+    // Zoom to feature when selected from search
+    searchInput.addEventListener('keydown', function(event) {
+      if (event.key === 'Enter' && searchInput.value.trim() !== '') {
+        var query = searchInput.value.toLowerCase();
+        var selectedFeature = null;
+
+        polygonFeatures.forEach(function (feature) {
+          var siteName = feature.properties.SITE_NAME;
+          if (siteName && siteName.toLowerCase() === query) {
+            selectedFeature = feature;
+          }
+        });
+
+        if (selectedFeature) {
+          var bounds = L.geoJSON(selectedFeature).getBounds();
+          map.fitBounds(bounds);
+        } else {
+          console.warn('No matching feature found for the entered query.');
+        }
+      }
+    });
+
+    // Add a draggable marker creation functionality with custom icon
+    var newMarker;
+    var customIcon = L.icon({
+      iconUrl: 'https://mass-eoeea.maps.arcgis.com/sharing/rest/content/items/22f32e8c92af44d8a23001ce571defa0/data',
+      iconSize: [32, 32], // Adjust the size as needed
+      iconAnchor: [16, 32] // Adjust the anchor point as needed
+    });
+
+    // Function to update attributes content with marker lat/lng and other info
+    function updateAttributesWindow(marker, attributes) {
+      var latLng = marker.getLatLng();
+      var attributesContent = document.getElementById('attributesContent');
+      attributesContent.innerHTML = ` <b><u>Closest DCR Building:</u></b>
+      ${attributes || "<p>New marker created. No nearby attributes found.</p>"}
+        <b>Latitude:</b> ${latLng.lat.toFixed(6)}<p>
+        <b>Longitude:</b> ${latLng.lng.toFixed(6)}<p>
+        
+       
+      `;
+      var attributesWindow = document.getElementById('attributesWindow');
+      attributesWindow.style.display = 'block';
+    }
+
+    map.on('click', function(e) {
+      if (newMarker) {
+        map.removeLayer(newMarker); // Remove previous marker if any
+      }
+
+      // Create a draggable marker where the user clicked with the custom icon
+      newMarker = L.marker(e.latlng, { icon: customIcon, draggable: true }).addTo(map);
+
+      // Find the closest existing marker
+      var closestMarker;
+      var closestDistance = Infinity;
+
+      pointLayer.eachFeature(function(layer) {
+        var distance = map.distance(e.latlng, layer.getLatLng());
+        if (distance < closestDistance) {
+          closestDistance = distance;
+          closestMarker = layer;
+        }
+      });
+
+      if (closestMarker) {
+        var properties = closestMarker.feature.properties;
+        updateAttributesWindow(newMarker, "<p><b>Name:</b> " + properties.NAME + "<br><b>Site Name:</b> " + properties.SITENAME + "</p>");
+      } else {
+        updateAttributesWindow(newMarker);
+      }
+
+      // Event listener for when the new marker is dragged
+      newMarker.on('dragend', function(e) {
+        var newMarkerLatLng = newMarker.getLatLng();
+        var closestMarkerOnDrag;
+        var closestDistanceOnDrag = Infinity;
+
+        pointLayer.eachFeature(function(layer) {
+          var distance = map.distance(newMarkerLatLng, layer.getLatLng());
+          if (distance < closestDistanceOnDrag) {
+            closestDistanceOnDrag = distance;
+            closestMarkerOnDrag = layer;
+          }
+        });
+
+        if (closestMarkerOnDrag) {
+          var draggedProperties = closestMarkerOnDrag.feature.properties;
+          updateAttributesWindow(newMarker, "<p><b>Name:</b> " + draggedProperties.NAME + "<br><b>Site Name:</b> " + draggedProperties.SITENAME + "</p>");
+        } else {
+          updateAttributesWindow(newMarker);
+        }
+      });
+    });
+
+    // Handle Reset Button click event to remove the marker
+    document.getElementById('resetMarkerBtn').addEventListener('click', function() {
+      if (newMarker) {
+        map.removeLayer(newMarker); // Remove the new marker
+        newMarker = null; // Reset the marker variable
+        var attributesWindow = document.getElementById('attributesWindow');
+        attributesWindow.style.display = 'none'; // Hide the attributes window
+      }
+    });
+
+    // Close button event listener
+    document.getElementById('closeWindowBtn').addEventListener('click', function() {
+      var attributesWindow = document.getElementById('attributesWindow');
+      attributesWindow.style.display = 'none'; // Hide the window
+    });
+  </script>
+</body>
+</html>
